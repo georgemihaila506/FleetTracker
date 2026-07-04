@@ -1,0 +1,35 @@
+# Live Fleet Tracker — infrastructure.
+# M1 brings up only Redis (the broker). Later milestones add app services:
+#   gateway, simulator, consumers (geofence/analytics/materializer/dropout),
+#   and observability (prometheus, grafana, redis_exporter).
+#
+# Usage:
+#   docker compose up -d redis
+#   docker compose exec redis redis-cli ping        # -> PONG
+#   docker compose exec redis redis-cli MONITOR     # watch every command live
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    container_name: fleet-redis
+    # Durability posture per docs/adr/0001: AOF with appendfsync everysec
+    # (accept a <=1s crash-loss window). RDB snapshots disabled to keep the
+    # durability story to a single, explicit mechanism.
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --save ""
+    ports:
+      - "6379:6379"           # exposed so host redis-cli / the app can connect
+    volumes:
+      - redis-data:/data      # AOF persists across restarts (recovery demo)
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  redis-data:
