@@ -1,0 +1,37 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Fleet Tracker — M3 (console)</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem; }
+  #stat { font-weight: 600; }
+  code { background: #eee; padding: 0 .3em; border-radius: 3px; }
+</style>
+
+<h1>Fleet Tracker — M3</h1>
+<p>No map yet (that's M4). Open the <b>browser console</b> to watch live positions
+stream in over the WebSocket.</p>
+<p id="stat">connecting…</p>
+
+<script>
+  const stat = document.getElementById("stat");
+  let count = 0;
+
+  // Same host/port that served this page; ws:// (or wss:// under TLS).
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const ws = new WebSocket(`${proto}//${location.host}/ws`);
+
+  ws.onopen = () => { stat.textContent = "connected — watching the console…"; };
+
+  ws.onmessage = (ev) => {
+    count++;
+    const pos = JSON.parse(ev.data);
+    console.log(
+      `${pos.vehicle_id}  lat=${pos.lat.toFixed(5)} lon=${pos.lon.toFixed(5)}`,
+      `spd=${pos.speed?.toFixed(1)} hdg=${pos.heading?.toFixed(0)}`
+    );
+    stat.textContent = `connected — ${count} positions received`;
+  };
+
+  ws.onclose = () => { stat.textContent = "disconnected"; };
+  ws.onerror = () => { stat.textContent = "error (is the simulator running?)"; };
+</script>

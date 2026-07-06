@@ -1,0 +1,90 @@
+"""FastAPI gateway: one Redis subscription -> many browser WebSockets.
+
+Lifecycle:
+  * startup: open a shared Redis client, SUBSCRIBE to positions:{city}, and start
+    a single background task that reads the channel and calls manager.broadcast().
+  * per WebSocket: register a bounded queue, then loop pulling from that queue and
+    sending to the browser (the per-connection sender).
+  * shutdown: stop the subscriber task and close Redis.
+
+The fan-out itself (broadcast) lives in manager.py — that's the ADR-0007 core.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+from ..shared.config import get_settings
+from ..shared.redis_client import make_redis
+from .manager import ConnectionManager
+
+_STATIC_DIR = Path(__file__).parent / "static"
+
+manager = ConnectionManager()
+
+
+async def _subscribe_and_fan_out(app: FastAPI) -> None:
+    """The single Redis subscriber. Reads positions:{city}, fans each to browsers."""
+    settings = get_settings()
+    redis = app.state.redis
+    pubsub = redis.pubsub()
+    await pubsub.subscribe(settings.positions_channel)
+    try:
+        async for msg in pubsub.listen():
+            if msg["type"] != "message":
+                continue  # skip subscribe/unsubscribe confirmations
+            manager.broadcast(msg["data"])  # str, thanks to decode_responses
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await pubsub.unsubscribe(settings.positions_channel)
+        await pubsub.aclose()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.redis = make_redis()
+    task = asyncio.create_task(_subscribe_and_fan_out(app))
+    try:
+        yield
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await app.state.redis.aclose()
+
+
+app = FastAPI(title="Fleet Tracker Gateway", lifespan=lifespan)
+
+
+@app.get("/healthz")
+async def healthz() -> dict[str, object]:
+    return {"status": "ok", "connections": manager.count, "dropped": manager.dropped}
+
+
+@app.websocket("/ws")
+async def ws_positions(ws: WebSocket) -> None:
+    """One browser connection: register a queue, then drain it to the socket."""
+    queue = await manager.connect(ws)
+    try:
+        while True:
+            message = await queue.get()  # blocks this connection only
+            await ws.send_text(message)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        manager.disconnect(ws)
+
+
+@app.get("/")
+async def index() -> FileResponse:
+    return FileResponse(_STATIC_DIR / "index.html")
+
+
+# Any other static assets (added in M4: the Leaflet map).
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
