@@ -69,9 +69,24 @@ async def healthz() -> dict[str, object]:
 
 @app.websocket("/ws")
 async def ws_positions(ws: WebSocket) -> None:
-    """One browser connection: register a queue, then drain it to the socket."""
-    queue = await manager.connect(ws)
+    """One browser connection: snapshot -> live (ADR-0005).
+
+    Order matters. We register the queue FIRST so live messages start buffering,
+    THEN send the current-state snapshot, THEN drain live. Any vehicle that moved
+    between snapshot and now is in the buffered live stream and supersedes the
+    snapshot copy — because positions are level-triggered state, the race
+    self-heals: the browser just sees one stale frame replaced by a fresh one.
+    """
+    settings = get_settings()
+    queue = await manager.connect(ws)  # register -> live starts buffering
     try:
+        # Cold-start snapshot: the whole fleet's latest positions in one shot,
+        # including vehicles that have since gone quiet.
+        snapshot = await ws.app.state.redis.hgetall(settings.positions_current_key)
+        for raw in snapshot.values():
+            await ws.send_text(raw)
+
+        # Then live.
         while True:
             message = await queue.get()  # blocks this connection only
             await ws.send_text(message)

@@ -52,6 +52,15 @@ class Settings(BaseSettings):
         """Pub/Sub channel carrying live position *state* for this city."""
         return f"positions:{self.city}"
 
+    @property
+    def positions_current_key(self) -> str:
+        """Redis hash holding the latest Position per vehicle (the read model).
+
+        One field per vehicle_id; HGETALL gives a fresh browser the whole fleet
+        instantly (ADR-0005 cold-start snapshot). Maintained by the materializer.
+        """
+        return f"positions:current:{self.city}"
+
 
 @lru_cache
 def get_settings() -> Settings:
