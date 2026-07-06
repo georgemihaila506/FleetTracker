@@ -125,4 +125,42 @@ Entries accrue as the design firms up during grilling.
   only builds state/views (pure function of the log); never into anything with
   external side effects. (ADR-0008)
 
+## Mental-model clarifications (things that get fuzzy)
+
+- **The fan-out tree (not a line)** — the pipeline isn't
+  `simulator → gateway → browser`. One producer publishes to *one* channel, and
+  **N independent subscribers each get every message**:
+
+  ```
+                     ┌─SUBSCRIBE─► gateway ──WebSocket──► browsers
+  simulator ─PUBLISH─► positions:{city}
+     (state)          └─SUBSCRIBE─► materializer ─HSET─► positions:current:{city}
+                        (Pub/Sub)                             (snapshot hash)
+  ```
+
+  Adding the materializer took nothing away from the gateway — Pub/Sub copies each
+  message to both. That's what lets more consumers (geofence, analytics, dropout)
+  bolt on later as just one more `SUBSCRIBE`. The two subscribers do *opposite*
+  things with the same feed: the gateway does **transient** delivery (push and
+  forget), the materializer does **stateful** accumulation (fold into a hash).
+  (ADR-0003)
+
+- **"streaming" (lowercase) vs. Redis Streams (capital S)** — a name collision
+  worth pinning:
+  - *streaming* = continuous push of messages. The **WebSocket** streams to the
+    browser; **Pub/Sub** streams server-side. Both are "streaming" in this loose
+    sense.
+  - **Redis Streams** (`XADD`) = a specific **durable log** data structure for
+    *events*, not built until M6/M7. Unrelated to WebSockets.
+  - So "the WebSocket is the streaming part" is fine *if* you mean the browser
+    transport — but a WebSocket is best-effort / at-most-once, whereas Redis
+    Streams will be durable / at-least-once. Different layer, different guarantee.
+    (ADR-0002)
+
+- **The three hops** — data streams across three different transports:
+  `simulator ─PUBLISH─► Pub/Sub` (hop 1), `Pub/Sub ─SUBSCRIBE─► gateway` (hop 2,
+  server-side stream), `gateway ─WebSocket─► browser` (hop 3, client-side stream).
+  The gateway is the bridge that turns one server-side stream into N client
+  streams — the fan-out. (ADR-0007)
+
 <!-- Decisions that pin these terms down are recorded in docs/adr/. -->
