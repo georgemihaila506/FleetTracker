@@ -1,37 +1,104 @@
 <!doctype html>
+<html lang="en">
+<head>
 <meta charset="utf-8" />
-<title>Fleet Tracker — M3 (console)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fleet Tracker</title>
+<link rel="stylesheet" href="/static/vendor/leaflet.css" />
 <style>
-  body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem; }
-  #stat { font-weight: 600; }
-  code { background: #eee; padding: 0 .3em; border-radius: 3px; }
+  html, body { margin: 0; height: 100%; font: 14px/1.4 system-ui, sans-serif; }
+  #map { position: absolute; inset: 0; }
+  #hud {
+    position: absolute; z-index: 1000; top: 12px; right: 12px;
+    background: rgba(255,255,255,.92); border-radius: 8px; padding: 10px 14px;
+    box-shadow: 0 1px 6px rgba(0,0,0,.3); min-width: 150px;
+  }
+  #hud h1 { margin: 0 0 6px; font-size: 15px; }
+  #hud .row { display: flex; justify-content: space-between; gap: 16px; }
+  #hud .num { font-variant-numeric: tabular-nums; font-weight: 600; }
+  #dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+         background: #bbb; vertical-align: middle; margin-right: 5px; }
+  #dot.on { background: #22c55e; }
 </style>
+</head>
+<body>
+<div id="map"></div>
+<div id="hud">
+  <h1><span id="dot"></span>Fleet Tracker</h1>
+  <div class="row"><span>vehicles</span><span class="num" id="n-veh">0</span></div>
+  <div class="row"><span>messages</span><span class="num" id="n-msg">0</span></div>
+  <div class="row"><span>status</span><span class="num" id="status">…</span></div>
+</div>
 
-<h1>Fleet Tracker — M3</h1>
-<p>No map yet (that's M4). Open the <b>browser console</b> to watch live positions
-stream in over the WebSocket.</p>
-<p id="stat">connecting…</p>
-
+<script src="/static/vendor/leaflet.js"></script>
 <script>
-  const stat = document.getElementById("stat");
-  let count = 0;
+  // --- map -----------------------------------------------------------------
+  const map = L.map("map").setView([44.4268, 26.1025], 13); // Bucharest
+  // Basemap tiles come from OpenStreetMap over the network (the only runtime
+  // internet dependency; the vehicle dots work with or without it).
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "&copy; OpenStreetMap contributors",
+  }).addTo(map);
 
-  // Same host/port that served this page; ws:// (or wss:// under TLS).
+  // --- state (conflated: latest position per vehicle) ----------------------
+  const latest = new Map();   // vehicle_id -> position object (newest only)
+  const markers = new Map();  // vehicle_id -> Leaflet circleMarker
+  let dirty = false;          // something changed since last repaint
+  let msgCount = 0;
+
+  const nVeh = document.getElementById("n-veh");
+  const nMsg = document.getElementById("n-msg");
+  const statusEl = document.getElementById("status");
+  const dot = document.getElementById("dot");
+
+  function colorFor(speed) {
+    // slow = amber, cruising = green, fast = blue — purely cosmetic.
+    if (speed == null) return "#3b82f6";
+    if (speed < 6) return "#f59e0b";
+    if (speed < 14) return "#22c55e";
+    return "#2563eb";
+  }
+
+  // --- repaint on animation frames, not per message ------------------------
+  // Batch + conflate (ADR-0007): many messages may arrive between frames; we
+  // only ever draw each vehicle's newest position, once per frame.
+  function paint() {
+    if (dirty) {
+      for (const [id, p] of latest) {
+        let m = markers.get(id);
+        if (!m) {
+          m = L.circleMarker([p.lat, p.lon], {
+            radius: 6, weight: 1, color: "#fff", fillOpacity: 0.9,
+          }).addTo(map);
+          m.bindTooltip(id, { direction: "top", offset: [0, -6] });
+          markers.set(id, m);
+        } else {
+          m.setLatLng([p.lat, p.lon]);
+        }
+        m.setStyle({ fillColor: colorFor(p.speed) });
+      }
+      nVeh.textContent = latest.size;
+      nMsg.textContent = msgCount;
+      dirty = false;
+    }
+    requestAnimationFrame(paint);
+  }
+  requestAnimationFrame(paint);
+
+  // --- websocket: snapshot then live, same message shape for both ----------
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${location.host}/ws`);
 
-  ws.onopen = () => { stat.textContent = "connected — watching the console…"; };
-
+  ws.onopen = () => { dot.classList.add("on"); statusEl.textContent = "live"; };
   ws.onmessage = (ev) => {
-    count++;
-    const pos = JSON.parse(ev.data);
-    console.log(
-      `${pos.vehicle_id}  lat=${pos.lat.toFixed(5)} lon=${pos.lon.toFixed(5)}`,
-      `spd=${pos.speed?.toFixed(1)} hdg=${pos.heading?.toFixed(0)}`
-    );
-    stat.textContent = `connected — ${count} positions received`;
+    const p = JSON.parse(ev.data);
+    latest.set(p.vehicle_id, p);  // conflate: newest wins
+    msgCount++;
+    dirty = true;
   };
-
-  ws.onclose = () => { stat.textContent = "disconnected"; };
-  ws.onerror = () => { stat.textContent = "error (is the simulator running?)"; };
+  ws.onclose = () => { dot.classList.remove("on"); statusEl.textContent = "offline"; };
+  ws.onerror = () => { statusEl.textContent = "error"; };
 </script>
+</body>
+</html>

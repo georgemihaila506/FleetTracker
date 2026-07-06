@@ -43,5 +43,5 @@ tests/
 ## Status
 
 Design complete (8 ADRs). Done: **M1** (skeleton & broker), **M2** (simulator →
-Pub/Sub), **M3** (gateway WebSocket fan-out). Next: **M4** (live map + cold-start
-snapshot).
+Pub/Sub), **M3** (gateway WebSocket fan-out), **M4** (live Leaflet map +
+materializer/cold-start snapshot). Next: **M5** (real routes & scale).
