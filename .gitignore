@@ -22,6 +22,9 @@ dump.rdb
 appendonly.aof
 appendonlydir/
 data/
+# ...but the simulator's cached OSRM route set is a committed asset, not a dump.
+!src/fleet_tracker/simulator/data/
+!src/fleet_tracker/simulator/data/routes.json
 
 # Env / secrets
 .env

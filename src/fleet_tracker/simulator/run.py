@@ -16,15 +16,15 @@ import asyncio
 from ..shared.config import get_settings
 from ..shared.models import Position
 from ..shared.redis_client import redis_client
-from .vehicle import make_fleet
+from .route_vehicle import make_route_fleet
 
 
 async def run() -> None:
     settings = get_settings()
 
-    # Bucharest-ish centre; city name only drives the channel, not the map.
-    center_lat, center_lon = 44.4268, 26.1025
-    fleet = make_fleet(settings.vehicle_count, center_lat, center_lon)
+    # M5: vehicles follow real Bucharest streets (cached OSRM routes) instead of
+    # wandering. The city name still only drives the Redis channel, not the map.
+    fleet = make_route_fleet(settings.vehicle_count)
 
     print(
         f"simulator: {len(fleet)} vehicles -> {settings.positions_channel} "
