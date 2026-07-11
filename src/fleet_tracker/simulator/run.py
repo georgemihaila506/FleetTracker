@@ -46,7 +46,22 @@ async def run() -> None:
                     speed=v.speed,
                     heading=v.heading,
                 )
-                delivered += await r.publish(settings.positions_channel, pos.to_wire())
+                wire = pos.to_wire()
+
+                # Ephemeral state path (M2): fire-and-forget to live subscribers.
+                # Redis stores nothing; a slow/absent subscriber just misses it.
+                delivered += await r.publish(settings.positions_channel, wire)
+
+                # Durable event path (M6): append the SAME bytes to the telemetry
+                # stream so they survive for consumers that read later (geofence,
+                # analytics) — at-least-once instead of at-most-once.
+                await r.xadd(
+                    settings.telemetry_stream,
+                    {"data": wire},
+                    maxlen=settings.stream_maxlen,
+                    approximate=True,  # MAXLEN ~ : cheap, trims whole nodes
+                )
+
             print(f"tick: published {len(fleet)}, delivered {delivered}")
             await asyncio.sleep(settings.tick_interval)
 

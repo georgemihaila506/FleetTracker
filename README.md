@@ -44,5 +44,6 @@ tests/
 
 Design complete (8 ADRs). Done: **M1** (skeleton & broker), **M2** (simulator →
 Pub/Sub), **M3** (gateway WebSocket fan-out), **M4** (live Leaflet map +
-materializer/cold-start snapshot), **M5** (real OSRM road routes, 50 vehicles).
-Next: **M6** (durable stream path + retention).
+materializer/cold-start snapshot), **M5** (real OSRM road routes, 50 vehicles),
+**M6** (durable stream path: `XADD telemetry:{city}` + `MAXLEN ~` retention).
+Next: **M7** (geofence consumer — consumer groups, XACK/XAUTOCLAIM).

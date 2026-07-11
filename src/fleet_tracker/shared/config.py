@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     # every tick, so a dropped message just means "wait one tick" (ADR-0002).
     tick_hz: float = Field(default=1.0, gt=0)
 
+    # --- Streams (durable event path, M6) ----------------------------------
+    # Cap the telemetry stream's length so it doesn't grow in RAM forever. Trim
+    # is approximate (MAXLEN ~) — cheap, removes whole macro-nodes (ADR-0006).
+    stream_maxlen: int = Field(default=10_000, ge=1)
+
     @property
     def tick_interval(self) -> float:
         """Seconds between ticks (the sleep the simulator loop waits)."""
@@ -51,6 +56,28 @@ class Settings(BaseSettings):
     def positions_channel(self) -> str:
         """Pub/Sub channel carrying live position *state* for this city."""
         return f"positions:{self.city}"
+
+    @property
+    def telemetry_stream(self) -> str:
+        """Redis Stream carrying durable position *events* for this city (M6).
+
+        Same payload as ``positions_channel``, opposite delivery semantics: XADD
+        appends to a persistent, replayable log (at-least-once for consumers),
+        whereas PUBLISH is fire-and-forget (at-most-once). Consumed later by the
+        geofence/analytics groups (M7/M8).
+        """
+        return f"telemetry:{self.city}"
+
+    @property
+    def retention_seconds(self) -> float:
+        """How far back the telemetry stream reaches: MAXLEN / rate (ADR-0006).
+
+        Production rate = vehicles x tick_hz entries/sec. A consumer offline
+        longer than this loses the trimmed entries — the durability guarantee
+        only holds *within* this window.
+        """
+        rate = self.vehicle_count * self.tick_hz
+        return self.stream_maxlen / rate if rate else float("inf")
 
     @property
     def positions_current_key(self) -> str:
