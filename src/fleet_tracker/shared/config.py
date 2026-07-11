@@ -82,6 +82,18 @@ class Settings(BaseSettings):
     # --- Geofence (durable event consumer, M7) -----------------------------
     geofence_group: str = "geofence"
 
+    # --- Replay (M10) ------------------------------------------------------
+    @property
+    def replay_channel(self) -> str:
+        """Isolated channel for replayed history — ONLY the UI subscribes here.
+
+        The whole point of ADR-0008: side-effecting consumers (geofence,
+        analytics, dropout) never listen on this, so replaying old data can't
+        re-fire their effects. Isolation, not idempotency, is what makes replay
+        safe.
+        """
+        return f"replay:{self.city}"
+
     # --- Dropout watcher (absence detection, M9) ---------------------------
     # A vehicle silent longer than this is declared offline; the scan runs on its
     # own timer (not the stream), because absence produces no message to react to.

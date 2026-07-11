@@ -51,5 +51,7 @@ effectively-once; zone polygons + alert toasts on the map),
 **M8** (analytics consumer — second group / independent cursor, cumulative
 distance + avg speed, fleet stats panel),
 **M9** (dropout watcher — absence detection by heartbeat timeout; greys offline
-vehicles on the map).
-Next: **M10** (replay — isolated `XRANGE` re-emit).
+vehicles on the map),
+**M10** (replay — paced `XRANGE` re-emit to an isolated channel; watch history on
+the map without re-firing effects).
+Next: **M11** (Grafana/Prometheus observability).

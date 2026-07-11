@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..consumers.zones import ZONES
+from ..replay.run import run as replay_run
 from ..shared.config import get_settings
 from ..shared.redis_client import make_redis
 from .manager import ConnectionManager
@@ -147,6 +149,37 @@ async def ws_positions(ws: WebSocket) -> None:
         pass
     finally:
         manager.disconnect(ws)
+
+
+@app.websocket("/ws/replay")
+async def ws_replay(ws: WebSocket) -> None:
+    """Watch history on the map (M10). Isolated from the live path on purpose.
+
+    On connect we (a) subscribe to the replay channel and stream it to this one
+    browser, and (b) kick off a replay of the last ``last`` seconds at ``speed``x.
+    The effect processors never subscribe to replay:{city}, so this animation
+    re-fires nothing — the point of ADR-0008.
+    """
+    settings = get_settings()
+    await ws.accept()
+    last = float(ws.query_params.get("last", 60))
+    speed = float(ws.query_params.get("speed", 10))
+
+    pubsub = ws.app.state.redis.pubsub()
+    await pubsub.subscribe(settings.replay_channel)
+    task = asyncio.create_task(replay_run(time.time() - last, speed))
+    try:
+        async for msg in pubsub.listen():
+            if msg["type"] != "message":
+                continue
+            await ws.send_text(msg["data"])
+    except (WebSocketDisconnect, RuntimeError):
+        pass  # browser closed mid-stream
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await pubsub.unsubscribe(settings.replay_channel)
+        await pubsub.aclose()
 
 
 @app.get("/")

@@ -22,6 +22,21 @@
   #hud .sep { border: none; border-top: 1px solid #eee; margin: 8px 0; }
   #hud .top { margin-top: 4px; font-size: 12px; color: #555; }
   #hud .top div { display: flex; justify-content: space-between; gap: 16px; }
+  #replay-btn {
+    margin-top: 8px; width: 100%; padding: 6px 8px; cursor: pointer;
+    border: 1px solid #c4b5fd; background: #f5f3ff; color: #6d28d9;
+    border-radius: 6px; font: inherit; font-weight: 600;
+  }
+  #replay-btn:hover { background: #ede9fe; }
+  /* pulsing badge, shown only while replaying (body.replaying) */
+  #replay-badge {
+    position: absolute; z-index: 1000; top: 12px; left: 50%; transform: translateX(-50%);
+    display: none; padding: 6px 14px; border-radius: 999px; font-weight: 700;
+    background: #7c3aed; color: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.3);
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  body.replaying #replay-badge { display: block; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
 
   /* alert toasts, bottom-left, newest on top, auto-fading */
   #toasts {
@@ -55,7 +70,10 @@
   <div class="row"><span>fleet dist</span><span class="num" id="s-dist">…</span></div>
   <div class="row"><span>fleet avg</span><span class="num" id="s-avg">…</span></div>
   <div id="s-top" class="top"></div>
+  <hr class="sep" />
+  <button id="replay-btn">▶ Replay last 60s</button>
 </div>
+<div id="replay-badge">● REPLAY</div>
 <div id="toasts"></div>
 
 <script src="/static/vendor/leaflet.js"></script>
@@ -167,6 +185,9 @@
 
   ws.onopen = () => { dot.classList.add("on"); statusEl.textContent = "live"; };
   ws.onmessage = (ev) => {
+    // While replaying we're driving the map from history — ignore live pushes so
+    // the two timelines don't fight over the dots.
+    if (replaying) return;
     const m = JSON.parse(ev.data);
     // Three message shapes share this socket, told apart by a discriminator
     // field (no envelope, so the position path stays byte-identical to M4):
@@ -206,6 +227,35 @@
   }
   setInterval(pollStats, 2000);
   pollStats();
+
+  // --- replay: watch the last 60s of history on the isolated channel --------
+  // Opening /ws/replay both kicks off the replay (server-side) and streams it
+  // here. It carries only Positions, on replay:{city} — the effect processors
+  // never see it, so nothing re-fires (ADR-0008).
+  let replaying = false;
+  let replayWs = null;
+  const replayBtn = document.getElementById("replay-btn");
+  replayBtn.onclick = () => (replaying ? stopReplay() : startReplay());
+
+  function startReplay() {
+    replaying = true;
+    replayBtn.textContent = "■ Stop replay";
+    document.body.classList.add("replaying");
+    replayWs = new WebSocket(`${proto}//${location.host}/ws/replay?last=60&speed=10`);
+    replayWs.onmessage = (ev) => {
+      const p = JSON.parse(ev.data);
+      latest.set(p.vehicle_id, p);  // same paint pipeline, fed from history
+      dirty = true;
+    };
+    replayWs.onclose = () => { if (replaying) stopReplay(); };  // replay ended
+  }
+
+  function stopReplay() {
+    replaying = false;
+    replayBtn.textContent = "▶ Replay last 60s";
+    document.body.classList.remove("replaying");
+    if (replayWs) { replayWs.close(); replayWs = null; }
+  }
 </script>
 </body>
 </html>
