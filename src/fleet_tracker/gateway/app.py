@@ -13,6 +13,7 @@ The fan-out itself (broadcast) lives in manager.py — that's the ADR-0007 core.
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -81,6 +82,32 @@ async def zones() -> list[dict[str, object]]:
     return [
         {"name": z.name, "polygon": [list(pt) for pt in z.polygon]} for z in ZONES
     ]
+
+
+@app.get("/stats")
+async def stats() -> dict[str, object]:
+    """Fleet rollups from the analytics read model (analytics:{city} hash).
+
+    A plain REST read of a materialized view — the analytics consumer group keeps
+    the hash current; the gateway just aggregates it on demand. The map polls this.
+    """
+    settings = get_settings()
+    raw = await app.state.redis.hgetall(settings.analytics_key)
+    vehicles = [json.loads(v) for v in raw.values()]
+    if not vehicles:
+        return {"vehicles": 0, "total_distance_km": 0.0, "avg_speed": 0.0, "top": []}
+    total_m = sum(v["distance_m"] for v in vehicles)
+    avg_speed = sum(v["avg_speed"] for v in vehicles) / len(vehicles)
+    top = sorted(vehicles, key=lambda v: v["distance_m"], reverse=True)[:3]
+    return {
+        "vehicles": len(vehicles),
+        "total_distance_km": round(total_m / 1000, 2),
+        "avg_speed": round(avg_speed, 1),
+        "top": [
+            {"vehicle_id": v["vehicle_id"], "km": round(v["distance_m"] / 1000, 2)}
+            for v in top
+        ],
+    }
 
 
 @app.websocket("/ws")

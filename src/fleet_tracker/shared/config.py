@@ -82,6 +82,18 @@ class Settings(BaseSettings):
     # --- Geofence (durable event consumer, M7) -----------------------------
     geofence_group: str = "geofence"
 
+    # --- Analytics (second consumer group, M8) -----------------------------
+    analytics_group: str = "analytics"
+
+    @property
+    def analytics_key(self) -> str:
+        """Redis hash of per-vehicle rollups (distance, avg speed, samples).
+
+        A second read model, maintained by the analytics group reading the SAME
+        telemetry stream as geofence but on its own independent cursor (fan-out).
+        """
+        return f"analytics:{self.city}"
+
     @property
     def alerts_stream(self) -> str:
         """Durable log of geofence ENTER/EXIT *events* for this city (XADD).

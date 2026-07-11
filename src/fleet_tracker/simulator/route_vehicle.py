@@ -25,8 +25,9 @@ from .routes import Route, bearing_deg, load_routes
 class RouteVehicle:
     vehicle_id: str
     route: Route
-    distance: float  # metres travelled from the route's start (wraps at the end)
+    distance: float  # metres from the route's start (0 .. route.length_m)
     speed: float = field(default_factory=lambda: random.uniform(6, 14))  # m/s
+    direction: int = 1  # +1 driving toward the route end, -1 back toward the start
 
     # Derived each tick from `distance` — filled by _locate() below.
     lat: float = 0.0
@@ -41,9 +42,24 @@ class RouteVehicle:
         """Advance the vehicle by ``dt`` seconds of driving."""
         # Vary speed a little for organic motion, clamped to a city range.
         self.speed = _clamp(self.speed + random.uniform(-1.5, 1.5), 4.0, 18.0)
-        # Drive forward along the path; wrap around at the end so it loops forever.
-        self.distance = (self.distance + self.speed * dt) % self.route.length_m
+
+        # Drive along the path and PING-PONG at the ends: reflect off each end and
+        # reverse direction rather than teleporting from end back to start. A
+        # teleport would inject a huge fake jump into the position stream (which
+        # the analytics consumer would faithfully sum as bogus distance).
+        length = self.route.length_m
+        self.distance += self.direction * self.speed * dt
+        if self.distance > length:
+            self.distance = 2 * length - self.distance  # bounce off the far end
+            self.direction = -1
+        elif self.distance < 0:
+            self.distance = -self.distance  # bounce off the start
+            self.direction = 1
+
         self.lat, self.lon, self.heading = self._locate(self.distance)
+        # _locate gives the segment's forward bearing; flip it when driving back.
+        if self.direction < 0:
+            self.heading = (self.heading + 180) % 360
 
     def _locate(self, distance: float) -> tuple[float, float, float]:
         """Map ``distance`` travelled → ``(lat, lon, heading)``.

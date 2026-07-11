@@ -47,5 +47,7 @@ Pub/Sub), **M3** (gateway WebSocket fan-out), **M4** (live Leaflet map +
 materializer/cold-start snapshot), **M5** (real OSRM road routes, 50 vehicles),
 **M6** (durable stream path: `XADD telemetry:{city}` + `MAXLEN ~` retention),
 **M7** (geofence consumer group — edge-detection idempotency, XACK/XAUTOCLAIM,
-effectively-once; zone polygons + alert toasts on the map).
-Next: **M8** (analytics consumer — second group, independent cursor).
+effectively-once; zone polygons + alert toasts on the map),
+**M8** (analytics consumer — second group / independent cursor, cumulative
+distance + avg speed, fleet stats panel).
+Next: **M9** (dropout watcher — absence detection).

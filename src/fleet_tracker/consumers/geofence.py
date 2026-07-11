@@ -13,6 +13,10 @@ against durable ``was_inside`` state in Redis. Reprocessing the same position
 recomputes the same membership → no transition → no duplicate alert. That's
 **effectively-once = at-least-once delivery + idempotent processing** (ADR-0004).
 
+The consumer-group loop itself lives in ``stream_group.py`` (shared with the M8
+analytics consumer); this module supplies the group name + the ``_process``
+handler.
+
 Run:   python -m fleet_tracker.consumers.geofence
 Watch: docker compose exec redis redis-cli XRANGE alerts:testcity - +
 """
@@ -21,33 +25,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-
-import redis.exceptions
 
 from ..shared.config import Settings, get_settings
 from ..shared.models import Alert, Position
-from ..shared.redis_client import redis_client
+from .stream_group import run_group
 from .zones import zones_containing
-
-# How long an entry must sit un-acked in a dead consumer's pending list before a
-# live consumer may steal it (XAUTOCLAIM). The crash-recovery threshold: too low
-# and a briefly-slow consumer gets its work stolen; too high and recovery lags.
-_MIN_IDLE_MS = 5_000
-
-
-async def _ensure_group(r, settings: Settings) -> None:
-    """Create the consumer group at the stream tail (idempotent)."""
-    try:
-        # id="$" => the group starts reading only entries added from now on, so a
-        # fresh run doesn't replay the whole retained backlog. mkstream creates
-        # the stream if the simulator hasn't run yet.
-        await r.xgroup_create(
-            settings.telemetry_stream, settings.geofence_group, id="$", mkstream=True
-        )
-    except redis.exceptions.ResponseError as exc:
-        if "BUSYGROUP" not in str(exc):  # group already exists -> fine
-            raise
 
 
 async def _load_inside(r, settings: Settings, vehicle_id: str) -> set[str]:
@@ -77,7 +59,7 @@ async def _emit(r, settings: Settings, pos: Position, zone: str, kind: str, sour
 
 async def _process(r, settings: Settings, source_id: str, pos: Position) -> None:
     """Edge-detect zone crossings for one position and emit ENTER/EXIT alerts.
-    
+
     Why this is idempotent: if this exact entry is redelivered (consumer crashed
     before XACK, XAUTOCLAIM hands it back), ``now_inside`` recomputes identical to
     the ``was_inside`` we already stored → both diffs are empty → nothing re-fires.
@@ -94,59 +76,15 @@ async def _process(r, settings: Settings, source_id: str, pos: Position) -> None
     await _store_inside(r, settings, pos.vehicle_id, now_inside)
 
 
-async def _reclaim(r, settings: Settings, consumer: str) -> None:
-    """Steal and reprocess entries abandoned by a crashed consumer (XAUTOCLAIM).
-
-    Safe precisely because _process is idempotent: reprocessing a reclaimed entry
-    can't double-fire an alert. This is the mechanism behind 'no lost events.'
-    """
-    cursor = "0-0"
-    while True:
-        result = await r.xautoclaim(
-            settings.telemetry_stream, settings.geofence_group, consumer,
-            min_idle_time=_MIN_IDLE_MS, start_id=cursor, count=50,
-        )
-        cursor, messages = result[0], result[1]
-        for entry_id, fields in messages:
-            if fields and "data" in fields:
-                await _process(r, settings, entry_id, Position.from_wire(fields["data"]))
-            await r.xack(settings.telemetry_stream, settings.geofence_group, entry_id)
-        if cursor == "0-0":  # walked the whole pending list
-            break
-
-
 async def run() -> None:
     settings = get_settings()
-    consumer = f"geofence-{os.getpid()}"  # unique per process (crash-recovery)
-    async with redis_client(settings) as r:
-        await _ensure_group(r, settings)
-        print(
-            f"geofence: group '{settings.geofence_group}' consumer '{consumer}' "
-            f"on {settings.telemetry_stream}  (Ctrl-C to stop)"
-        )
-        try:
-            while True:
-                # 1. Recover anything a dead consumer left un-acked, then...
-                await _reclaim(r, settings, consumer)
-                # 2. ...read new entries for this consumer ('>' = never-delivered).
-                resp = await r.xreadgroup(
-                    settings.geofence_group, consumer,
-                    {settings.telemetry_stream: ">"}, count=100, block=2000,
-                )
-                if not resp:
-                    continue  # block timed out; loop to reclaim + read again
-                for _stream, entries in resp:
-                    for entry_id, fields in entries:
-                        await _process(
-                            r, settings, entry_id, Position.from_wire(fields["data"])
-                        )
-                        # XACK only AFTER processing: a crash before this leaves the
-                        # entry pending -> it gets reclaimed, not lost.
-                        await r.xack(
-                            settings.telemetry_stream, settings.geofence_group, entry_id
-                        )
-        except asyncio.CancelledError:
-            pass
+    await run_group(
+        settings,
+        stream=settings.telemetry_stream,
+        group=settings.geofence_group,
+        handler=_process,
+        label="geofence",
+    )
 
 
 def main() -> None:

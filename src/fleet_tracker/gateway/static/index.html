@@ -19,6 +19,9 @@
   #dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
          background: #bbb; vertical-align: middle; margin-right: 5px; }
   #dot.on { background: #22c55e; }
+  #hud .sep { border: none; border-top: 1px solid #eee; margin: 8px 0; }
+  #hud .top { margin-top: 4px; font-size: 12px; color: #555; }
+  #hud .top div { display: flex; justify-content: space-between; gap: 16px; }
 
   /* alert toasts, bottom-left, newest on top, auto-fading */
   #toasts {
@@ -48,6 +51,10 @@
   <div class="row"><span>messages</span><span class="num" id="n-msg">0</span></div>
   <div class="row"><span>alerts</span><span class="num" id="n-alert">0</span></div>
   <div class="row"><span>status</span><span class="num" id="status">…</span></div>
+  <hr class="sep" />
+  <div class="row"><span>fleet dist</span><span class="num" id="s-dist">…</span></div>
+  <div class="row"><span>fleet avg</span><span class="num" id="s-avg">…</span></div>
+  <div id="s-top" class="top"></div>
 </div>
 <div id="toasts"></div>
 
@@ -163,6 +170,25 @@
   };
   ws.onclose = () => { dot.classList.remove("on"); statusEl.textContent = "offline"; };
   ws.onerror = () => { statusEl.textContent = "error"; };
+
+  // --- fleet stats: poll the analytics read model every 2s ------------------
+  // Positions/alerts are pushed over the WS; stats are a materialized view the
+  // analytics group keeps in Redis, so a simple periodic pull is the right fit.
+  const sDist = document.getElementById("s-dist");
+  const sAvg = document.getElementById("s-avg");
+  const sTop = document.getElementById("s-top");
+  async function pollStats() {
+    try {
+      const s = await (await fetch("/stats")).json();
+      sDist.textContent = s.total_distance_km.toFixed(1) + " km";
+      sAvg.textContent = s.avg_speed.toFixed(1) + " m/s";
+      sTop.innerHTML = s.top
+        .map((v) => `<div><span>${v.vehicle_id}</span><span>${v.km.toFixed(1)} km</span></div>`)
+        .join("");
+    } catch (e) { /* gateway restart / analytics not up yet — ignore */ }
+  }
+  setInterval(pollStats, 2000);
+  pollStats();
 </script>
 </body>
 </html>
