@@ -82,6 +82,28 @@ class Settings(BaseSettings):
     # --- Geofence (durable event consumer, M7) -----------------------------
     geofence_group: str = "geofence"
 
+    # --- Dropout watcher (absence detection, M9) ---------------------------
+    # A vehicle silent longer than this is declared offline; the scan runs on its
+    # own timer (not the stream), because absence produces no message to react to.
+    dropout_threshold_s: float = Field(default=5.0, gt=0)
+    dropout_scan_interval_s: float = Field(default=2.0, gt=0)
+
+    @property
+    def dropout_stream(self) -> str:
+        """Durable log of vehicle offline/online *events* (XADD)."""
+        return f"dropouts:{self.city}"
+
+    @property
+    def dropout_channel(self) -> str:
+        """Pub/Sub channel for live presence updates (grey/ungrey the map)."""
+        return f"dropout:{self.city}"
+
+    @property
+    def dropout_offline_key(self) -> str:
+        """Set of vehicle_ids currently offline — the read model a fresh browser
+        loads so it greys the right dots on connect (ADR-0005 cold-start, again)."""
+        return f"dropout:offline:{self.city}"
+
     # --- Analytics (second consumer group, M8) -----------------------------
     analytics_group: str = "analytics"
 

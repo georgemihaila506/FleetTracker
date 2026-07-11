@@ -42,7 +42,11 @@ async def _subscribe_and_fan_out(app: FastAPI) -> None:
     settings = get_settings()
     redis = app.state.redis
     pubsub = redis.pubsub()
-    channels = (settings.positions_channel, settings.alerts_channel)
+    channels = (
+        settings.positions_channel,
+        settings.alerts_channel,
+        settings.dropout_channel,
+    )
     await pubsub.subscribe(*channels)
     try:
         async for msg in pubsub.listen():
@@ -128,6 +132,12 @@ async def ws_positions(ws: WebSocket) -> None:
         snapshot = await ws.app.state.redis.hgetall(settings.positions_current_key)
         for raw in snapshot.values():
             await ws.send_text(raw)
+
+        # Presence snapshot: grey any vehicles already offline, so a fresh browser
+        # doesn't show a dead vehicle as live until the next transition (ADR-0005).
+        offline = await ws.app.state.redis.smembers(settings.dropout_offline_key)
+        for vid in offline:
+            await ws.send_text(json.dumps({"vehicle_id": vid, "status": "offline"}))
 
         # Then live.
         while True:

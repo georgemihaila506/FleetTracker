@@ -94,3 +94,24 @@ class Alert(BaseModel):
     @classmethod
     def from_wire(cls, raw: str) -> "Alert":
         return cls.model_validate_json(raw)
+
+
+class Presence(BaseModel):
+    """A vehicle going offline or coming back — an EVENT manufactured by the
+    dropout watcher (ADR-0002).
+
+    Nothing *sends* "I went offline"; the watcher infers it from the absence of
+    heartbeats and emits this. ``online`` is the recovery transition. Like Alert,
+    it's a discrete event → durable stream + a live PUBLISH for the map.
+    """
+
+    vehicle_id: str
+    status: Literal["offline", "online"]
+    ts: float = Field(default_factory=time.time)
+
+    def to_wire(self) -> str:
+        return self.model_dump_json()
+
+    @classmethod
+    def from_wire(cls, raw: str) -> "Presence":
+        return cls.model_validate_json(raw)

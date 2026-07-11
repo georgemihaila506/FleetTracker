@@ -83,6 +83,7 @@
   // --- state (conflated: latest position per vehicle) ----------------------
   const latest = new Map();   // vehicle_id -> position object (newest only)
   const markers = new Map();  // vehicle_id -> Leaflet circleMarker
+  const offline = new Set();  // vehicle_ids currently offline (drawn grey)
   let dirty = false;          // something changed since last repaint
   let msgCount = 0;
 
@@ -118,7 +119,10 @@
         } else {
           m.setLatLng([p.lat, p.lon]);
         }
-        m.setStyle({ fillColor: colorFor(p.speed) });
+        m.setStyle({
+          fillColor: offline.has(id) ? "#9ca3af" : colorFor(p.speed),
+          fillOpacity: offline.has(id) ? 0.45 : 0.9,
+        });
       }
       nVeh.textContent = latest.size;
       nMsg.textContent = msgCount;
@@ -150,6 +154,13 @@
     setTimeout(() => el.remove(), 5000);
   }
 
+  // --- presence: grey a vehicle that's gone offline, restore on return -----
+  function handlePresence(p) {
+    if (p.status === "offline") offline.add(p.vehicle_id);
+    else offline.delete(p.vehicle_id);
+    dirty = true;  // repaint so the marker's colour flips
+  }
+
   // --- websocket: snapshot then live, same message shape for both ----------
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${location.host}/ws`);
@@ -157,11 +168,17 @@
   ws.onopen = () => { dot.classList.add("on"); statusEl.textContent = "live"; };
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
-    // Two message shapes share this socket: an Alert has a `kind` (enter/exit);
-    // a Position has lat/lon. Sniff the discriminator rather than enveloping,
-    // so the position snapshot/live path stays byte-identical to M4.
+    // Three message shapes share this socket, told apart by a discriminator
+    // field (no envelope, so the position path stays byte-identical to M4):
+    //   Alert    -> has `kind`   (enter/exit)
+    //   Presence -> has `status` (offline/online)
+    //   Position -> has lat/lon
     if (m.kind) {
       handleAlert(m);
+      return;
+    }
+    if (m.status) {
+      handlePresence(m);
       return;
     }
     latest.set(m.vehicle_id, m);  // conflate: newest wins

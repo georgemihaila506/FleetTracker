@@ -49,5 +49,7 @@ materializer/cold-start snapshot), **M5** (real OSRM road routes, 50 vehicles),
 **M7** (geofence consumer group — edge-detection idempotency, XACK/XAUTOCLAIM,
 effectively-once; zone polygons + alert toasts on the map),
 **M8** (analytics consumer — second group / independent cursor, cumulative
-distance + avg speed, fleet stats panel).
-Next: **M9** (dropout watcher — absence detection).
+distance + avg speed, fleet stats panel),
+**M9** (dropout watcher — absence detection by heartbeat timeout; greys offline
+vehicles on the map).
+Next: **M10** (replay — isolated `XRANGE` re-emit).
