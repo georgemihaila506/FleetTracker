@@ -79,6 +79,33 @@ class Settings(BaseSettings):
         rate = self.vehicle_count * self.tick_hz
         return self.stream_maxlen / rate if rate else float("inf")
 
+    # --- Geofence (durable event consumer, M7) -----------------------------
+    geofence_group: str = "geofence"
+
+    @property
+    def alerts_stream(self) -> str:
+        """Durable log of geofence ENTER/EXIT *events* for this city (XADD).
+
+        The durable copy is what enables replay (M10) and sink-side dedup; a
+        parallel PUBLISH on ``alerts_channel`` drives live toasts.
+        """
+        return f"alerts:{self.city}"
+
+    @property
+    def alerts_channel(self) -> str:
+        """Pub/Sub channel for live alert toasts (best-effort, at-most-once)."""
+        return f"alerts:{self.city}"
+
+    @property
+    def geofence_inside_key(self) -> str:
+        """Durable ``was_inside`` state: hash vehicle_id -> set of zone names.
+
+        Lives in Redis (not the consumer's RAM) so edge detection survives a
+        consumer crash — the crux of idempotent, effectively-once processing
+        (ADR-0004). Without it, a restarted consumer would re-fire every ENTER.
+        """
+        return f"geofence:inside:{self.city}"
+
     @property
     def positions_current_key(self) -> str:
         """Redis hash holding the latest Position per vehicle (the read model).

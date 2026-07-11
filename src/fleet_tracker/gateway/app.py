@@ -20,6 +20,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from ..consumers.zones import ZONES
 from ..shared.config import get_settings
 from ..shared.redis_client import make_redis
 from .manager import ConnectionManager
@@ -30,11 +31,18 @@ manager = ConnectionManager()
 
 
 async def _subscribe_and_fan_out(app: FastAPI) -> None:
-    """The single Redis subscriber. Reads positions:{city}, fans each to browsers."""
+    """The single Redis subscriber. Fans positions AND alerts out to browsers.
+
+    Both channels ride the same WebSocket to each browser; the page tells them
+    apart by shape (a Position has lat/lon, an Alert has a ``kind``). Alerts are
+    events, but on the browser edge they're still best-effort (ADR-0007) — the
+    durable record lives in the alerts:{city} stream, the WS toast is a courtesy.
+    """
     settings = get_settings()
     redis = app.state.redis
     pubsub = redis.pubsub()
-    await pubsub.subscribe(settings.positions_channel)
+    channels = (settings.positions_channel, settings.alerts_channel)
+    await pubsub.subscribe(*channels)
     try:
         async for msg in pubsub.listen():
             if msg["type"] != "message":
@@ -43,7 +51,7 @@ async def _subscribe_and_fan_out(app: FastAPI) -> None:
     except asyncio.CancelledError:
         pass
     finally:
-        await pubsub.unsubscribe(settings.positions_channel)
+        await pubsub.unsubscribe(*channels)
         await pubsub.aclose()
 
 
@@ -65,6 +73,14 @@ app = FastAPI(title="Fleet Tracker Gateway", lifespan=lifespan)
 @app.get("/healthz")
 async def healthz() -> dict[str, object]:
     return {"status": "ok", "connections": manager.count, "dropped": manager.dropped}
+
+
+@app.get("/zones")
+async def zones() -> list[dict[str, object]]:
+    """Geofence polygons for the map to draw (one source of truth: zones.py)."""
+    return [
+        {"name": z.name, "polygon": [list(pt) for pt in z.polygon]} for z in ZONES
+    ]
 
 
 @app.websocket("/ws")

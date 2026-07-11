@@ -19,6 +19,25 @@
   #dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
          background: #bbb; vertical-align: middle; margin-right: 5px; }
   #dot.on { background: #22c55e; }
+
+  /* alert toasts, bottom-left, newest on top, auto-fading */
+  #toasts {
+    position: absolute; z-index: 1000; left: 12px; bottom: 12px;
+    display: flex; flex-direction: column-reverse; gap: 6px; max-width: 320px;
+  }
+  .toast {
+    padding: 8px 12px; border-radius: 6px; color: #fff; font-weight: 600;
+    font-size: 13px; box-shadow: 0 1px 6px rgba(0,0,0,.3);
+    animation: toastfade 5s ease forwards;
+  }
+  .toast.enter { background: #16a34a; }  /* green */
+  .toast.exit  { background: #d97706; }  /* amber */
+  @keyframes toastfade {
+    0%   { opacity: 0; transform: translateY(6px); }
+    6%   { opacity: 1; transform: none; }
+    85%  { opacity: 1; }
+    100% { opacity: 0; }
+  }
 </style>
 </head>
 <body>
@@ -27,8 +46,10 @@
   <h1><span id="dot"></span>Fleet Tracker</h1>
   <div class="row"><span>vehicles</span><span class="num" id="n-veh">0</span></div>
   <div class="row"><span>messages</span><span class="num" id="n-msg">0</span></div>
+  <div class="row"><span>alerts</span><span class="num" id="n-alert">0</span></div>
   <div class="row"><span>status</span><span class="num" id="status">…</span></div>
 </div>
+<div id="toasts"></div>
 
 <script src="/static/vendor/leaflet.js"></script>
 <script>
@@ -41,6 +62,17 @@
     attribution: "&copy; OpenStreetMap contributors",
   }).addTo(map);
 
+  // --- geofence zones (drawn once from the gateway's /zones endpoint) -------
+  // One source of truth: these polygons come from consumers/zones.py, the same
+  // definitions the geofence consumer edge-detects against.
+  fetch("/zones").then((r) => r.json()).then((zones) => {
+    for (const z of zones) {
+      L.polygon(z.polygon, {
+        color: "#7c3aed", weight: 2, fillColor: "#7c3aed", fillOpacity: 0.08,
+      }).addTo(map).bindTooltip(z.name, { sticky: true });
+    }
+  });
+
   // --- state (conflated: latest position per vehicle) ----------------------
   const latest = new Map();   // vehicle_id -> position object (newest only)
   const markers = new Map();  // vehicle_id -> Leaflet circleMarker
@@ -49,8 +81,11 @@
 
   const nVeh = document.getElementById("n-veh");
   const nMsg = document.getElementById("n-msg");
+  const nAlert = document.getElementById("n-alert");
   const statusEl = document.getElementById("status");
   const dot = document.getElementById("dot");
+  const toastsEl = document.getElementById("toasts");
+  let alertCount = 0;
 
   function colorFor(speed) {
     // slow = amber, cruising = green, fast = blue — purely cosmetic.
@@ -86,14 +121,43 @@
   }
   requestAnimationFrame(paint);
 
+  // --- alerts: a toast + a brief marker flash ------------------------------
+  function handleAlert(a) {
+    alertCount++;
+    nAlert.textContent = alertCount;
+
+    // Flash the vehicle's marker so you can see WHERE the crossing happened.
+    const m = markers.get(a.vehicle_id);
+    if (m) {
+      const base = m.options.radius;
+      m.setStyle({ weight: 3, color: a.kind === "enter" ? "#16a34a" : "#d97706" });
+      m.setRadius(base + 5);
+      setTimeout(() => { m.setRadius(base); m.setStyle({ weight: 1, color: "#fff" }); }, 1200);
+    }
+
+    const el = document.createElement("div");
+    el.className = "toast " + a.kind;
+    el.textContent =
+      `${a.vehicle_id} ${a.kind === "enter" ? "entered" : "left"} ${a.zone}`;
+    toastsEl.appendChild(el);
+    setTimeout(() => el.remove(), 5000);
+  }
+
   // --- websocket: snapshot then live, same message shape for both ----------
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${location.host}/ws`);
 
   ws.onopen = () => { dot.classList.add("on"); statusEl.textContent = "live"; };
   ws.onmessage = (ev) => {
-    const p = JSON.parse(ev.data);
-    latest.set(p.vehicle_id, p);  // conflate: newest wins
+    const m = JSON.parse(ev.data);
+    // Two message shapes share this socket: an Alert has a `kind` (enter/exit);
+    // a Position has lat/lon. Sniff the discriminator rather than enveloping,
+    // so the position snapshot/live path stays byte-identical to M4.
+    if (m.kind) {
+      handleAlert(m);
+      return;
+    }
+    latest.set(m.vehicle_id, m);  // conflate: newest wins
     msgCount++;
     dirty = true;
   };

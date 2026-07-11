@@ -33,6 +33,7 @@ Hints (no need to import anything not already here):
 from __future__ import annotations
 
 import time
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -63,4 +64,33 @@ class Position(BaseModel):
     @classmethod
     def from_wire(cls, raw: str) -> "Position":
         """Parse (and validate) a message received off the wire."""
+        return cls.model_validate_json(raw)
+
+
+class Alert(BaseModel):
+    """A geofence crossing — an EVENT message (ADR-0002).
+
+    Unlike a Position, an Alert happened *once* and must not be lost: it's
+    XADD'd to the durable ``alerts:{city}`` stream (and PUBLISH'd for a live
+    toast). ``source_id`` is the telemetry stream entry that triggered it, which
+    makes ``dedup_id`` deterministic — the same crossing always yields the same
+    id, so a sink can recognise and drop a redelivered duplicate (ADR-0004).
+    """
+
+    vehicle_id: str
+    zone: str
+    kind: Literal["enter", "exit"]
+    ts: float = Field(default_factory=time.time)
+    source_id: str  # the telemetry <ms>-<seq> id that caused this alert
+
+    @property
+    def dedup_id(self) -> str:
+        """Deterministic identity for sink-side de-duplication."""
+        return f"{self.vehicle_id}:{self.zone}:{self.kind}:{self.source_id}"
+
+    def to_wire(self) -> str:
+        return self.model_dump_json()
+
+    @classmethod
+    def from_wire(cls, raw: str) -> "Alert":
         return cls.model_validate_json(raw)
